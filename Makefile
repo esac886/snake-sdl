@@ -1,10 +1,10 @@
 run: compile
 	./build/snake
 
-all: clean run
+all: run
 
 compile:
-	gcc -lSDL2 src/snake.c -o build/snake
+	gcc -lSDL2 -lSDL2_ttf src/snake.c -g -o build/snake
 
 clean:
 	rm -f src/*.o build/snake

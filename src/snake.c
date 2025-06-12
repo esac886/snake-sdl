@@ -1,26 +1,30 @@
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include <time.h>
-
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_events.h>
+#include <SDL2/SDL_joystick.h>
 #include <SDL2/SDL_keyboard.h>
 #include <SDL2/SDL_rect.h>
 #include <SDL2/SDL_render.h>
+#include <SDL2/SDL_rwops.h>
 #include <SDL2/SDL_timer.h>
+#include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_video.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+#include "opensans_semibold.h"
 
 #define UNIT 10
 #define WIN_H_UN 30
 #define WIN_W_UN 30
 
-#define WIN_H_PX UNIT * WIN_H_UN 
-#define WIN_W_PX UNIT * WIN_W_UN
+#define WIN_H_PX UNIT* WIN_H_UN
+#define WIN_W_PX UNIT* WIN_W_UN
 
-#define BACKGROUND_RGB 0,   0, 0, 1
-#define SNAKE_RGB      0, 255, 0, 1
-#define APPLE_RGB      255, 0, 0, 1
+#define BACKGROUND_RGB 0, 0, 0, 1
+#define SNAKE_RGB 0, 255, 0, 1
+#define APPLE_RGB 255, 0, 0, 1
 
 #define SNAKE_START_X 45
 #define SNAKE_START_Y 30
@@ -51,32 +55,50 @@ typedef struct {
     apple* apple;
 } game_state;
 
-void handle_input(SDL_Keysym keysym, snake_node* head);
-bool is_intersecting_snake(int x, int y, snake_node* tail);
+void render_init_scr(SDL_Renderer* renderer, TTF_Font* font);
 
 game_state* init_state(snake* snake, apple* apple);
+void update_state(game_state* state);
+void display(SDL_Renderer* renderer, game_state* state);
+
 apple* init_apple();
+
 snake* create_snake();
 void grow_snake(snake* snake);
 void destroy_snake(snake* snake);
 
-void update_state(game_state* state);
-void display(SDL_Renderer* renderer, game_state* state);
+void handle_input(SDL_Keysym keysym, snake_node* head);
+bool is_intersecting_snake(int x, int y, snake_node* tail);
 
+// TODO exiting in some places without free/destroy
 int main() {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
-        fprintf(stderr, "Error initializing SDL: %s\n", SDL_GetError());
+        fprintf(stderr, "error initializing SDL: %s\n", SDL_GetError());
         return 1;
     }
 
     SDL_Window* win = SDL_CreateWindow("snake", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIN_W_PX, WIN_H_PX, 0);
     SDL_Renderer* renderer = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
 
+    if (TTF_Init() == -1) {
+        fprintf(stderr, "error initializing SDL_TTF: %s\n", TTF_GetError());
+        return 1;
+    }
+    SDL_RWops* rw = SDL_RWFromConstMem(opensans_semibold_ttf, opensans_semibold_ttf_len);
+    TTF_Font* font = TTF_OpenFontRW(rw, 1, 20);
+    if (font == NULL) {
+        fprintf(stderr, "error: could not open the font\n", TTF_GetError());
+        exit(EXIT_FAILURE);
+    }
+
+    render_init_scr(renderer, font);
+
     snake* snake = create_snake();
     apple* apple = init_apple();
     game_state* state = init_state(snake, apple);
 
     bool quit = false;
+    bool pause = false;
 
     while (!quit) {
         SDL_Event event;
@@ -90,21 +112,27 @@ int main() {
                 case SDL_KEYDOWN:
                     if (!key_pressed) {
                         key_pressed = true;
-                        handle_input(event.key.keysym, snake->head);
+                        if (event.key.keysym.scancode == SDL_SCANCODE_P) {
+                            pause = !pause;
+                        } else if (!pause) {
+                            handle_input(event.key.keysym, snake->head);
+                        }
                     }
             }
         }
 
-        update_state(state);
-        snake_node* head = snake->head;
-        for (snake_node* node = snake->tail; node != head; node = node->next) {
-            if (node->x == head->x && node->y == head->y) {
-                quit = true;
+        if (!pause) {
+            update_state(state);
+            snake_node* head = snake->head;
+            for (snake_node* node = snake->tail; node != head; node = node->next) {
+                if (node->x == head->x && node->y == head->y) {
+                    quit = true;
+                }
             }
         }
 
         display(renderer, state);
-        SDL_Delay(1000/FPS);
+        SDL_Delay(1000 / FPS);
     }
 
     destroy_snake(snake);
@@ -113,6 +141,44 @@ int main() {
     SDL_Quit();
 
     return 0;
+}
+
+void render_init_scr(SDL_Renderer* renderer, TTF_Font* font) {
+    int text_width;
+    int text_height;
+
+    SDL_Color textColor = {255, 255, 255, 0};
+    SDL_Surface* surface;
+    SDL_Texture* texture;
+    SDL_Rect rect = {0};
+
+    // TODO cycle
+    char* messages[] = {"SNAKE", "wasd/arrows to move", "p to pause, q to quit"};
+    int x[] = {125, 50, 60};
+    int y[] = {50, 150, 200};
+
+    for (size_t i = 0; i < 3; i++) {
+        surface = TTF_RenderText_Solid(font, messages[i], textColor);
+        texture = SDL_CreateTextureFromSurface(renderer, surface);
+        text_width = surface->w;
+        text_height = surface->h;
+        SDL_FreeSurface(surface);
+
+        rect.x = x[i];
+        rect.y = y[i];
+        rect.w = text_width;
+        rect.h = text_height;
+
+        SDL_RenderCopy(renderer, texture, NULL, &rect);
+        SDL_RenderDrawRect(renderer, &rect);
+    }
+
+    SDL_RenderPresent(renderer);
+    SDL_DestroyTexture(texture);
+    TTF_CloseFont(font);
+
+    // TODO cannot exit while waiting on this delay
+    SDL_Delay(2500);
 }
 
 apple* init_apple() {
@@ -147,25 +213,24 @@ void display(SDL_Renderer* renderer, game_state* state) {
     SDL_RenderClear(renderer);
 
     SDL_SetRenderDrawColor(renderer, APPLE_RGB);
-    SDL_Rect point = { .x = state->apple->x, .y = state->apple->y, .w = UNIT, .h = UNIT };
+    SDL_Rect point = {.x = state->apple->x, .y = state->apple->y, .w = UNIT, .h = UNIT};
     SDL_RenderDrawRect(renderer, &point);
 
     SDL_SetRenderDrawColor(renderer, SNAKE_RGB);
     for (snake_node* node = state->snake->tail; node != NULL; node = node->next) {
-        SDL_Rect point = { .x = node->x, .y = node->y, .w = UNIT, .h = UNIT };
+        SDL_Rect point = {.x = node->x, .y = node->y, .w = UNIT, .h = UNIT};
         SDL_RenderDrawRect(renderer, &point);
     }
 
     SDL_RenderPresent(renderer);
 }
 
-
 void update_state(game_state* state) {
     snake* snake = state->snake;
 
     // move snake
     snake_node* tail = snake->tail;
-    for (snake_node* node = tail; node != NULL; node =  node->next) {
+    for (snake_node* node = tail; node != NULL; node = node->next) {
         snake_node* next = node->next;
 
         if (next != NULL) {
@@ -193,7 +258,7 @@ void update_state(game_state* state) {
     }
     if (head->y > WIN_H_PX - 10) head->y = 0;
     if (head->y < 0) head->y = WIN_H_PX - 10;
-    
+
     // process apple
     apple* apple = state->apple;
     if (apple->exists) {
@@ -219,7 +284,7 @@ snake* create_snake() {
         exit(2);
     }
 
-    //create head
+    // create head
     snake_node* head = malloc(sizeof(snake_node));
     if (head == NULL) {
         fprintf(stderr, "Failed to allocate memory for snake head");
@@ -235,7 +300,7 @@ snake* create_snake() {
     sn->head = head;
     sn->size = SNAKE_INIT_SIZE;
 
-    //create tail
+    // create tail
     snake_node* tail = malloc(sizeof(snake_node));
     if (tail == NULL) {
         fprintf(stderr, "Failed to allocate memory for snake tail");
@@ -267,7 +332,7 @@ snake* create_snake() {
 
     sn->tail = tail;
 
-    //create body
+    // create body
     for (int i = 2; i < SNAKE_INIT_SIZE; i++) {
         grow_snake(sn);
     }
@@ -284,7 +349,7 @@ void grow_snake(snake* snake) {
         exit(2);
     }
 
-    new_node->next = (struct snake_node*) tail;
+    new_node->next = (struct snake_node*)tail;
 
     new_node->x_dir = tail->x_dir;
     new_node->y_dir = tail->y_dir;
